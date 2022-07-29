@@ -21,7 +21,7 @@ timezone:
 # jekyll-seo-tag settings › https://github.com/jekyll/jekyll-seo-tag/blob/master/docs/usage.md
 # ↓ --------------------------
 
-title: Chirpy # the main title
+title: Salar Rabbal # the main title
 
 tagline: A text-focused Jekyll theme # it will display as the sub-title
 
@@ -83,7 +83,7 @@ theme_mode: dark # [light|dark]
 img_cdn:
 
 # the avatar on sidebar, support local or CORS resources
-avatar: https://avatars.githubusercontent.com/u/6818642?v=4
+avatar: assets/images/1658899599073.JPEG
 
 # boolean type, the global switch for ToC in posts.
 toc: true
