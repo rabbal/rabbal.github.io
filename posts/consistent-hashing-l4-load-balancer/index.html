@@ -1,0 +1,313 @@
+<!DOCTYPE html><html lang="en" ><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8"><meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f7f7"><meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1b1b1e"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="viewport" content="width=device-width, user-scalable=no initial-scale=1, shrink-to-fit=no, viewport-fit=cover" ><meta name="generator" content="Jekyll v4.4.1" /><meta property="og:title" content="Stop Reshuffling Connections: Consistent Hashing in an L4 Load Balancer" /><meta property="og:locale" content="en" /><meta name="description" content="Why an eBPF L4 load balancer needs consistent hashing — and how a control plane can compile a hash ring into a fixed map so backend changes move as little traffic as possible." /><meta name="twitter:description" property="og:description" content="Why an eBPF L4 load balancer needs consistent hashing — and how a control plane can compile a hash ring into a fixed map so backend changes move as little traffic as possible." /><link rel="canonical" href="/posts/consistent-hashing-l4-load-balancer/" /><meta property="og:url" content="/posts/consistent-hashing-l4-load-balancer/" /><meta property="og:site_name" content="Salar Rabbal" /><meta property="og:type" content="article" /><meta property="article:published_time" content="2026-09-07T22:00:00+00:00" /><meta property="article:modified_time" content="2026-09-07T22:00:00+00:00" /><meta name="twitter:card" content="summary" /><meta name="twitter:title" content="Stop Reshuffling Connections: Consistent Hashing in an L4 Load Balancer" /><meta name="twitter:site" content="@salar_rabbal" /> <script type="application/ld+json"> {"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2026-09-07T22:00:00+00:00","datePublished":"2026-09-07T22:00:00+00:00","description":"Why an eBPF L4 load balancer needs consistent hashing — and how a control plane can compile a hash ring into a fixed map so backend changes move as little traffic as possible.","headline":"Stop Reshuffling Connections: Consistent Hashing in an L4 Load Balancer","mainEntityOfPage":{"@type":"WebPage","@id":"/posts/consistent-hashing-l4-load-balancer/"},"url":"/posts/consistent-hashing-l4-load-balancer/"}</script><title>Stop Reshuffling Connections: Consistent Hashing in an L4 Load Balancer | Salar Rabbal</title><link rel="apple-touch-icon" sizes="180x180" href="/assets/img/favicons/apple-touch-icon.png"><link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicons/favicon-32x32.png"><link rel="icon" type="image/png" sizes="16x16" href="/assets/img/favicons/favicon-16x16.png"><link rel="manifest" href="/assets/img/favicons/site.webmanifest"><link rel="shortcut icon" href="/assets/img/favicons/favicon.ico"><meta name="apple-mobile-web-app-title" content="Salar Rabbal"><meta name="application-name" content="Salar Rabbal"><meta name="msapplication-TileColor" content="#da532c"><meta name="msapplication-config" content="/assets/img/favicons/browserconfig.xml"><meta name="theme-color" content="#ffffff"><link rel="preconnect" href="https://fonts.googleapis.com" ><link rel="dns-prefetch" href="https://fonts.googleapis.com" ><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="dns-prefetch" href="https://fonts.gstatic.com" crossorigin><link rel="preconnect" href="https://fonts.googleapis.com" ><link rel="dns-prefetch" href="https://fonts.googleapis.com" ><link rel="preconnect" href="https://cdn.jsdelivr.net" ><link rel="dns-prefetch" href="https://cdn.jsdelivr.net" ><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lato&family=Source+Sans+Pro:wght@400;600;700;900&display=swap"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4/dist/css/bootstrap.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@5.11.2/css/all.min.css"><link rel="stylesheet" href="/assets/css/style.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tocbot@4.20.1/dist/tocbot.min.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/magnific-popup@1/dist/magnific-popup.min.css"> <script src="https://cdn.jsdelivr.net/npm/jquery@3/dist/jquery.min.js"></script> <script type="text/javascript"> class ModeToggle { static get MODE_KEY() { return "mode"; } static get MODE_ATTR() { return "data-mode"; } static get DARK_MODE() { return "dark"; } static get LIGHT_MODE() { return "light"; } static get ID() { return "mode-toggle"; } constructor() { if (this.hasMode) { if (this.isDarkMode) { if (!this.isSysDarkPrefer) { this.setDark(); } } else { if (this.isSysDarkPrefer) { this.setLight(); } } } let self = this; /* always follow the system prefers */ this.sysDarkPrefers.addEventListener('change', () => { if (self.hasMode) { if (self.isDarkMode) { if (!self.isSysDarkPrefer) { self.setDark(); } } else { if (self.isSysDarkPrefer) { self.setLight(); } } self.clearMode(); } self.notify(); }); } /* constructor() */ get sysDarkPrefers() { return window.matchMedia("(prefers-color-scheme: dark)"); } get isSysDarkPrefer() { return this.sysDarkPrefers.matches; } get isDarkMode() { return this.mode === ModeToggle.DARK_MODE; } get isLightMode() { return this.mode === ModeToggle.LIGHT_MODE; } get hasMode() { return this.mode != null; } get mode() { return sessionStorage.getItem(ModeToggle.MODE_KEY); } /* get the current mode on screen */ get modeStatus() { if (this.isDarkMode || (!this.hasMode && this.isSysDarkPrefer)) { return ModeToggle.DARK_MODE; } else { return ModeToggle.LIGHT_MODE; } } setDark() { $('html').attr(ModeToggle.MODE_ATTR, ModeToggle.DARK_MODE); sessionStorage.setItem(ModeToggle.MODE_KEY, ModeToggle.DARK_MODE); } setLight() { $('html').attr(ModeToggle.MODE_ATTR, ModeToggle.LIGHT_MODE); sessionStorage.setItem(ModeToggle.MODE_KEY, ModeToggle.LIGHT_MODE); } clearMode() { $('html').removeAttr(ModeToggle.MODE_ATTR); sessionStorage.removeItem(ModeToggle.MODE_KEY); } /* Notify another plugins that the theme mode has changed */ notify() { window.postMessage({ direction: ModeToggle.ID, message: this.modeStatus }, "*"); } flipMode() { if (this.hasMode) { if (this.isSysDarkPrefer) { if (this.isLightMode) { this.clearMode(); } else { this.setLight(); } } else { if (this.isDarkMode) { this.clearMode(); } else { this.setDark(); } } } else { if (this.isSysDarkPrefer) { this.setLight(); } else { this.setDark(); } } this.notify(); } /* flipMode() */ } /* ModeToggle */ const modeToggle = new ModeToggle(); </script><body data-topbar-visible="true"><div id="sidebar" class="d-flex flex-column align-items-end"><div class="profile-wrapper text-center"><div id="avatar"> <a href="/" class="mx-auto"> <img src="/assets/img/1658899599073.JPEG" alt="avatar" onerror="this.style.display='none'"> </a></div><div class="site-title"> <a href="/">Salar Rabbal</a></div><div class="site-subtitle font-italic">Senior Software Engineer | Technical Leadership | Go | System Design | Distributed Systems | CDN | Linux</div></div><ul class="w-100"><li class="nav-item"> <a href="/" class="nav-link"> <i class="fa-fw fas fa-home ml-xl-3 mr-xl-3 unloaded"></i> <span>HOME</span> </a><li class="nav-item"> <a href="/categories/" class="nav-link"> <i class="fa-fw fas fa-stream ml-xl-3 mr-xl-3 unloaded"></i> <span>CATEGORIES</span> </a><li class="nav-item"> <a href="/tags/" class="nav-link"> <i class="fa-fw fas fa-tag ml-xl-3 mr-xl-3 unloaded"></i> <span>TAGS</span> </a><li class="nav-item"> <a href="/archives/" class="nav-link"> <i class="fa-fw fas fa-archive ml-xl-3 mr-xl-3 unloaded"></i> <span>ARCHIVES</span> </a><li class="nav-item"> <a href="/about/" class="nav-link"> <i class="fa-fw fas fa-info-circle ml-xl-3 mr-xl-3 unloaded"></i> <span>ABOUT</span> </a></ul><div class="sidebar-bottom mt-auto d-flex flex-wrap justify-content-center align-items-center"> <button class="mode-toggle btn" aria-label="Switch Mode"> <i class="fas fa-adjust"></i> </button> <span class="icon-border"></span> <a href="https://github.com/rabbal" aria-label="github" target="_blank" rel="noopener noreferrer"> <i class="fab fa-github"></i> </a> <a href="https://twitter.com/salar_rabbal" aria-label="twitter" target="_blank" rel="noopener noreferrer"> <i class="fab fa-twitter"></i> </a> <a href="javascript:location.href = 'mailto:' + ['salarrabbal','gmail.com'].join('@')" aria-label="email" > <i class="fas fa-envelope"></i> </a> <a href="/feed.xml" aria-label="rss" > <i class="fas fa-rss"></i> </a></div></div><div id="topbar-wrapper"><div id="topbar" class="container d-flex align-items-center justify-content-between h-100 pl-3 pr-3 pl-md-4 pr-md-4"> <span id="breadcrumb"> <span> <a href="/"> Home </a> </span> <span>Stop Reshuffling Connections: Consistent Hashing in an L4 Load Balancer</span> </span> <i id="sidebar-trigger" class="fas fa-bars fa-fw"></i><div id="topbar-title"> Post</div><i id="search-trigger" class="fas fa-search fa-fw"></i> <span id="search-wrapper" class="align-items-center"> <i class="fas fa-search fa-fw"></i> <input class="form-control" id="search-input" type="search" aria-label="search" autocomplete="off" placeholder="Search..."> </span> <span id="search-cancel" >Cancel</span></div></div><div id="main-wrapper" class="d-flex justify-content-center"><div id="main" class="container pl-xl-4 pr-xl-4"><div class="row"><div id="core-wrapper" class="col-12 col-lg-11 col-xl-9 pr-xl-4"><div class="post pl-1 pr-1 pl-md-2 pr-md-2"><h1 data-toc-skip>Stop Reshuffling Connections: Consistent Hashing in an L4 Load Balancer</h1><div class="post-meta text-muted"> <span> Posted <em class="" data-ts="1788818400" data-df="ll" data-toggle="tooltip" data-placement="bottom"> Sep 7, 2026 </em> </span><div class="d-flex justify-content-between"> <span> By <em> <a href="https://twitter.com/salar_rabbal">Salar Rabbal</a> </em> </span><div> <span class="readtime" data-toggle="tooltip" data-placement="bottom" title="2600 words"> <em>14 min</em> read</span></div></div></div><div class="post-content"><p>A load balancer should be allowed to change its mind about a backend.</p><p>It should <strong>not</strong> be allowed to change its mind about every other backend at the same time.</p><p>That distinction matters enormously for Layer 4 load balancing — especially when the data plane is an <strong>eBPF</strong> program running in the kernel, where every extra instruction and branch sits on the packet path.</p><p>When a backend becomes unhealthy, adding or removing it from the pool is expected. What is not expected is for thousands or millions of otherwise healthy connections to suddenly map to different destinations simply because one backend disappeared.</p><p>That is exactly what can happen with a conventional weighted lookup table.</p><p>The solution is <strong>consistent hashing</strong>.</p><p>There is an interesting constraint: the eBPF data plane does not perform a traditional consistent-hash lookup. It uses a small, fixed-size destination table — typically an eBPF map.</p><p>So instead of making the eBPF program more complicated, the complexity moves into the control plane. Consistent hashing is used to <strong>compile a dynamic hash ring into a fixed lookup table</strong>.</p><p>That gives the property that actually matters:</p><blockquote><p>When the backend pool changes, move as little traffic as possible.</p></blockquote><h2 id="the-problem-with-just-rebuild-the-table"><span class="mr-2">The problem with “just rebuild the table”</span><a href="#the-problem-with-just-rebuild-the-table" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>Start with a simple load balancer. Suppose there are 100 destination slots and four backends:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+</pre><td class="rouge-code"><pre>A A A A A A A A A A
+A A A A A A A A A A
+A A A A A A A A A A
+A A A A A A A A A A
+B B B B B B B B B B
+B B B B B B B B B B
+C C C C C C C C C C
+C C C C C C C C C C
+C C C C C C C C C C
+D D D D D D D D D D
+</pre></table></code></div></div><p>The exact distribution can be weighted, but the idea is the same: each backend owns a contiguous range of slots.</p><p>Now imagine B becomes unhealthy. The obvious implementation is:</p><ol><li>Remove B.<li>Recalculate the weights.<li>Rebuild the entire table.</ol><p>It sounds harmless. It isn’t.</p><p>The problem is that the meaning of a slot changes. A client that previously hashed to slot 42 might have been sent to A. After rebuilding, slot 42 might belong to C.</p><p>Nothing happened to A. Nothing happened to that client. Yet the mapping changed anyway.</p><p>For a stateless HTTP request, this may be barely noticeable. For an established TCP connection, it can be disastrous.</p><h2 id="tcp-doesnt-care-that-your-table-changed"><span class="mr-2">TCP doesn’t care that your table changed</span><a href="#tcp-doesnt-care-that-your-table-changed" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>An L4 load balancer sits below the application layer. It does not get to say:</p><blockquote><p>This request can safely be retried against another server.</p></blockquote><p>An established TCP connection has state. If traffic that previously went to Backend A is suddenly sent to Backend C, the new backend may have no knowledge of that connection:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+</pre><td class="rouge-code"><pre>         Client
+            │
+            │ existing TCP connection
+            ▼
+      Load Balancer
+            │
+    ┌───────┴───────┐
+    ▼               ▼
+ before           after
+Backend A       Backend C
+</pre></table></code></div></div><p>The backend change was legitimate. The collateral damage was not.</p><p>That is the real reason consistent hashing matters in an L4 load balancer. It is not primarily about a mathematically elegant distribution. It is about <strong>preserving stability</strong>.</p><h2 id="make-the-ebpf-data-plane-boring"><span class="mr-2">Make the eBPF data plane boring</span><a href="#make-the-ebpf-data-plane-boring" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>The easiest fix would be a full consistent-hash lookup in the packet path: walk a ring, binary-search tokens, apply weights on every packet. This design deliberately does not do that.</p><p>An eBPF L4 load balancer is a strong reason not to. Programs attached at XDP or TC run early in the kernel networking stack. They are verifier-constrained, latency-sensitive, and a poor place for dynamic ring construction or open-ended search. What they are good at is a short, predictable path over maps.</p><p>So the eBPF data plane stays deliberately boring:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+</pre><td class="rouge-code"><pre>  client IP
+      │
+      ▼
+    hash
+      │
+      ▼
+ slot index
+      │
+      ▼
+eBPF map (destination table)
+      │
+      ▼
+   backend
+</pre></table></code></div></div><p>The destination table is a fixed-size map. The eBPF program does not know about virtual nodes, rings, backend weights, token positions, or binary searches. That is a feature.</p><p>The userspace control plane does the complicated work and produces a simple artifact the program can consume:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre><td class="rouge-code"><pre>destinations[0..99]
+</pre></table></code></div></div><p>When backends change, the control plane rebuilds the map contents. The eBPF program keeps doing the same cheap lookup.</p><blockquote><p>Build complexity once in the control plane so that the eBPF data plane can remain extremely cheap.</p></blockquote><h2 id="a-consistent-hash-ring-behind-a-fixed-table"><span class="mr-2">A consistent hash ring behind a fixed table</span><a href="#a-consistent-hash-ring-behind-a-fixed-table" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>The control plane constructs a conventional virtual-node consistent hash ring. For every backend, it generates multiple virtual nodes.</p><p>If:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre><td class="rouge-code"><pre>virtual nodes per weight unit = 150
+</pre></table></code></div></div><p>then:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+</pre><td class="rouge-code"><pre>weight 1 → 150 virtual nodes
+weight 2 → 300 virtual nodes
+weight 4 → 600 virtual nodes
+</pre></table></code></div></div><p>A backend’s weight is represented by the number of tokens it contributes to the ring. Each token gets a deterministic position:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre><td class="rouge-code"><pre>position = xxHash64(backend identity || replica number)
+</pre></table></code></div></div><p>Conceptually:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+</pre><td class="rouge-code"><pre>              A
+        ●           ●
+     ●                 ●
+   C                     B
+     ●                 ●
+        ●           ●
+              C
+</pre></table></code></div></div><p>Once all tokens are generated, they are sorted by 64-bit position. That is the ring.</p><h2 id="why-the-hash-function-matters"><span class="mr-2">Why the hash function matters</span><a href="#why-the-hash-function-matters" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>This is one of those details that looks unimportant until it breaks assumptions.</p><p>You might think any fast hash is good enough. Not necessarily.</p><p>Virtual-node positions need to behave like independent random points on the ring. Consider two similar backend addresses:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+</pre><td class="rouge-code"><pre>10.0.0.1
+10.0.0.2
+</pre></table></code></div></div><p>A weakly mixing hash can preserve correlations between these inputs. Virtual nodes for the two backends can become correlated too. With a small number of slots, those correlations become very visible.</p><p>In extreme cases, two equally weighted backends can produce something like:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+</pre><td class="rouge-code"><pre>96 slots → A
+ 4 slots → B
+</pre></table></code></div></div><p>instead of:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+</pre><td class="rouge-code"><pre>50 slots → A
+50 slots → B
+</pre></table></code></div></div><p>That is not a theoretical curiosity. When the output space is small, bad statistical properties become operational problems.</p><p><strong>xxHash64</strong> provides strong avalanche behavior while remaining extremely fast. Small input changes should produce thoroughly different outputs — so <code class="language-plaintext highlighter-rouge">hash(A, replica)</code> and <code class="language-plaintext highlighter-rouge">hash(B, replica)</code> behave as unrelated positions even when A and B look almost identical.</p><h2 id="the-hash-output-is-the-coordinate"><span class="mr-2">The hash output is the coordinate</span><a href="#the-hash-output-is-the-coordinate" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>Another design choice: use the complete 64-bit hash output as the ring coordinate.</p><p>The ring spans <code class="language-plaintext highlighter-rouge">0 … 2⁶⁴ − 1</code>. There is no <code class="language-plaintext highlighter-rouge">hash % ringSize</code> and no truncation to 32 bits. The hash itself is the coordinate.</p><p>That gives an enormous address space:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre><td class="rouge-code"><pre>2⁶⁴ ≈ 1.84 × 10¹⁹
+</pre></table></code></div></div><p>With only thousands of virtual nodes, collisions are extraordinarily unlikely. More importantly, the model stays clean:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+</pre><td class="rouge-code"><pre>backend + replica
+        │
+        ▼
+    xxHash64
+        │
+        ▼
+  ring coordinate
+</pre></table></code></div></div><h2 id="bridging-thousands-of-tokens-to-100-slots"><span class="mr-2">Bridging thousands of tokens to 100 slots</span><a href="#bridging-thousands-of-tokens-to-100-slots" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>There may be thousands of points on the ring, but the data plane only has a fixed number of physical destination slots. Those worlds need a bridge.</p><p>Give every physical slot a deterministic position on the same ring. For slot <code class="language-plaintext highlighter-rouge">i</code>:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre><td class="rouge-code"><pre>slotPosition(i) = xxHash64(i)
+</pre></table></code></div></div><p>Then perform the standard consistent-hashing lookup:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+</pre><td class="rouge-code"><pre>slot position
+      │
+      ▼
+first token clockwise
+      │
+      ▼
+backend
+</pre></table></code></div></div><p>If the search reaches the end of the ring, it wraps to the first token.</p><p>The result is written into the physical destination table (the eBPF map). The program still does nothing more complicated than:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre><td class="rouge-code"><pre>client hash → slot → backend
+</pre></table></code></div></div><h2 id="why-hash-the-slots-too"><span class="mr-2">Why hash the slots too?</span><a href="#why-hash-the-slots-too" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>Slots could be placed at evenly spaced positions. They are not:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre><td class="rouge-code"><pre>slotPosition(i) = xxHash64(i)
+</pre></table></code></div></div><p>That spreads probes pseudo-randomly through the same 64-bit space, so the physical table structure does not introduce another deterministic pattern.</p><p>The two hashing operations are independent:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+</pre><td class="rouge-code"><pre>Backend + replica          Slot number
+        │                       │
+        ▼                       ▼
+    xxHash64                xxHash64
+        │                       │
+        ▼                       ▼
+ Virtual-node              Slot position
+   position
+</pre></table></code></div></div><p>Both live in the same coordinate system.</p><h2 id="the-payoff-removing-a-backend"><span class="mr-2">The payoff: removing a backend</span><a href="#the-payoff-removing-a-backend" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>Suppose A, B, and C have equal weights, and B becomes unhealthy.</p><p>With a sequential table, removing B can shift the boundaries of A and C.</p><p>With consistent hashing, remove B’s virtual nodes from the ring. That is it.</p><p>Slots that previously resolved to B now resolve to the next available token. Slots that resolved to A stay with A. Slots that resolved to C stay with C:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+</pre><td class="rouge-code"><pre>Before:
+
+A ─── B ─── C ─── A ─── B ─── C
+
+After removing B:
+
+A ───────── C ─── A ───────── C
+</pre></table></code></div></div><p>Some slots must move — traffic that belonged to B has to go somewhere. The important part is <strong>who does not move</strong>. A does not move because B disappeared. C does not move because B disappeared. Only B’s portion of the key space needs reassignment.</p><h2 id="close-to-the-minimum-possible-movement"><span class="mr-2">Close to the minimum possible movement</span><a href="#close-to-the-minimum-possible-movement" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>For <code class="language-plaintext highlighter-rouge">N</code> equally weighted backends, removing one means approximately <code class="language-plaintext highlighter-rouge">1 / N</code> of the key space must move:</p><div class="table-wrapper"><table><thead><tr><th style="text-align: right">Backends<th style="text-align: right">Approx. affected key space<tbody><tr><td style="text-align: right">2<td style="text-align: right">50%<tr><td style="text-align: right">3<td style="text-align: right">33%<tr><td style="text-align: right">4<td style="text-align: right">25%<tr><td style="text-align: right">10<td style="text-align: right">10%</table></div><p>If one out of ten backends disappears, there is no good reason for the other nine to exchange traffic among themselves. Consistent hashing encodes that intuition in the algorithm.</p><h2 id="adding-a-backend-is-local-too"><span class="mr-2">Adding a backend is local too</span><a href="#adding-a-backend-is-local-too" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>The same principle applies in the other direction. Given A and B, adding C introduces new virtual nodes that take ownership of portions previously owned by A and B.</p><p>Expect:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+</pre><td class="rouge-code"><pre>A → A or C
+B → B or C
+</pre></table></code></div></div><p>Not:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+</pre><td class="rouge-code"><pre>A → B
+B → A
+</pre></table></code></div></div><p>just because C was added.</p><blockquote><p>A new backend should primarily steal traffic, not cause unrelated traffic to move sideways.</p></blockquote><h2 id="weighted-backends-fall-out-naturally"><span class="mr-2">Weighted backends fall out naturally</span><a href="#weighted-backends-fall-out-naturally" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>If one backend has twice the capacity of another, give it approximately twice as many virtual nodes:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+</pre><td class="rouge-code"><pre>A: weight 4 → 600 tokens
+B: weight 2 → 300 tokens
+C: weight 3 → 450 tokens
+D: weight 1 → 150 tokens
+</pre></table></code></div></div><p>Expected ownership is roughly:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+</pre><td class="rouge-code"><pre>A → 40%
+B → 20%
+C → 30%
+D → 10%
+</pre></table></code></div></div><p>The ring provides proportional distribution. The fixed destination table provides the mapping consumed by the data plane.</p><h2 id="catch-100-slots-are-still-100-slots"><span class="mr-2">Catch: 100 slots are still 100 slots</span><a href="#catch-100-slots-are-still-100-slots" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>Consistent hashing does not create more resolution than the data plane provides.</p><p>With 100 physical slots and 50 equal-weight backends, the theoretical average is 2 slots per backend. A backend cannot own 2.37 slots — slots are discrete.</p><p>Distribution accuracy eventually becomes dominated by table size rather than hash quality. More virtual nodes improve the statistical quality of the ring. They do <strong>not</strong> increase the resolution of a 100-entry destination table.</p><p>If finer-grained distribution across many backends is needed, more physical slots are ultimately required.</p><h2 id="weight-changes-are-more-expensive"><span class="mr-2">Weight changes are more expensive</span><a href="#weight-changes-are-more-expensive" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>Consistent hashing gives excellent locality for backend additions and removals. Weight changes are different.</p><p>Changing A from weight 2 to weight 4 is not just metadata — it changes A’s token population. That introduces many new virtual nodes and remaps ownership across parts of the ring. A weight change can cause substantially more remapping than adding or removing a backend.</p><p>Membership changes have a strong locality guarantee. Not every configuration change has the same disruption characteristics.</p><h2 id="consistent-hashing-and-connection-affinity"><span class="mr-2">Consistent hashing and connection affinity</span><a href="#consistent-hashing-and-connection-affinity" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>Connection affinity benefits from this design. Imagine the data plane caches:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+</pre><td class="rouge-code"><pre>client IP → slot 42
+</pre></table></code></div></div><p>As long as slot 42 points to the same backend, that cached decision remains useful.</p><p>With a globally reshuffled table, the cache can go stale without the client changing:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+</pre><td class="rouge-code"><pre>client → slot 42 → Backend A
+                    │
+                 rebuild
+                    │
+                    ▼
+client → slot 42 → Backend C
+</pre></table></code></div></div><p>The cache still says “slot 42,” but slot 42 now means something else.</p><p>Consistent hashing reduces this because most slots stay associated with the same backend after an unrelated backend change:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+</pre><td class="rouge-code"><pre>Consistent hashing
+        │
+        ▼
+ fewer slot changes
+        │
+        ▼
+ more stable affinity
+        │
+        ▼
+fewer unnecessary connection moves
+</pre></table></code></div></div><h2 id="no-need-to-persist-the-ring"><span class="mr-2">No need to persist the ring</span><a href="#no-need-to-persist-the-ring" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>Ring construction can stay stateless. The control plane already has authoritative backend state. Whenever it needs to synchronize the destination table, it reconstructs the ring:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+</pre><td class="rouge-code"><pre>backend state
+      │
+      ▼
+generate tokens
+      │
+      ▼
+ sort tokens
+      │
+      ▼
+  map slots
+      │
+      ▼
+destination table
+</pre></table></code></div></div><p>There is no need to maintain a persistent ring and mutate it incrementally.</p><blockquote><p>The destination table is derived state.</p></blockquote><p>Given backends, weights, hash algorithm, and virtual-node configuration, the same table can be reproduced. That keeps the implementation deterministic and easier to reason about.</p><h2 id="complexity-lives-where-it-belongs"><span class="mr-2">Complexity lives where it belongs</span><a href="#complexity-lives-where-it-belongs" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>Building the ring requires sorting virtual nodes: <code class="language-plaintext highlighter-rouge">O(N log N)</code>, where <code class="language-plaintext highlighter-rouge">N</code> is the number of virtual nodes.</p><p>Each physical slot then does a binary search: <code class="language-plaintext highlighter-rouge">O(log N)</code>. Mapping all slots costs <code class="language-plaintext highlighter-rouge">O(S log N)</code>, where <code class="language-plaintext highlighter-rouge">S</code> is the number of physical slots.</p><p>For a small fixed table, that is cheap — and it happens in the control plane. The eBPF packet path stays simple.</p><blockquote><p>Spend CPU during configuration changes to save complexity and latency on every packet.</p></blockquote><h2 id="what-to-test"><span class="mr-2">What to test</span><a href="#what-to-test" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>A consistent-hashing implementation should be tested for properties, not just code coverage:</p><ul><li><strong>Determinism</strong> — same backend state produces the same mapping.<li><strong>Single backend</strong> — with one healthy backend, every slot resolves to it.<li><strong>Zero weight</strong> — a backend with zero effective weight owns no ring space.<li><strong>Proportional weights</strong> — a 2:1 weight ratio yields roughly a 2:1 slot ratio, within table limits.<li><strong>Backend removal</strong> — unaffected backends retain their existing slots.<li><strong>Backend addition</strong> — the new backend primarily takes ownership rather than causing existing backends to exchange ownership.<li><strong>Token determinism</strong> — the same backend and replica always produce the same ring position.<li><strong>Token distribution</strong> — collisions and pathological clustering should be extremely rare.</ul><h2 id="the-bigger-lesson"><span class="mr-2">The bigger lesson</span><a href="#the-bigger-lesson" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>It is tempting to treat load balancing as a problem of distributing traffic evenly. That is only half the problem.</p><p>In a real L4 system, <strong>stability is just as important as distribution</strong>.</p><p>A theoretically perfect distribution that constantly moves existing connections is not necessarily a good load balancer. A slightly less perfect distribution that preserves established mappings during topology changes can be much more useful operationally.</p><p>The design optimizes for both:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+</pre><td class="rouge-code"><pre>                 Load Balancer
+                      │
+          ┌───────────┴───────────┐
+          ▼                       ▼
+     Distribution             Stability
+          │                       │
+    virtual nodes          consistent hashing
+          │                       │
+          └───────────┬───────────┘
+                      ▼
+              fixed destination
+                 eBPF map
+                      │
+                      ▼
+               simple eBPF
+                data plane
+</pre></table></code></div></div><p>The ring handles the dynamic world of changing backends. The fixed map keeps the eBPF packet path simple. Together they give something more valuable than either technique alone: a load balancer that changes when it needs to, without constantly forgetting where everything else was.</p><h2 id="final-takeaway"><span class="mr-2">Final takeaway</span><a href="#final-takeaway" class="anchor text-muted"><i class="fas fa-hashtag"></i></a></h2><p>Backend failures, additions, and capacity changes are inevitable. A full reshuffle every time they happen does not have to be.</p><p>A consistent hash ring turns a global operation into a local one:</p><div class="language-text highlighter-rouge"><div class="code-header"> <span data-label-text="Text"><i class="fas fa-code small"></i></span> <button aria-label="copy" data-title-succeed="Copied!"><i class="far fa-clipboard"></i></button></div><div class="highlight"><code><table class="rouge-table"><tbody><tr><td class="rouge-gutter gl"><pre class="lineno">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+</pre><td class="rouge-code"><pre>Backend changes
+      │
+      ▼
+Ring changes locally
+      │
+      ▼
+Only affected slots move
+      │
+      ▼
+Most affinity mappings survive
+      │
+      ▼
+Fewer unnecessary TCP disruptions
+</pre></table></code></div></div><p>The key design principle is simple:</p><blockquote><p>When one backend changes, don’t make the entire system change with it.</p></blockquote><p>That is the real value of consistent hashing in an L4 load balancer.</p></div><div class="post-tail-wrapper text-muted"><div class="post-meta mb-3"> <i class="far fa-folder-open fa-fw mr-1"></i> <a href='/categories/engineering/'>Engineering</a>, <a href='/categories/networking/'>Networking</a></div><div class="post-tags"> <i class="fa fa-tags fa-fw mr-1"></i> <a href="/tags/load-balancing/" class="post-tag no-text-decoration" >load-balancing</a> <a href="/tags/consistent-hashing/" class="post-tag no-text-decoration" >consistent-hashing</a> <a href="/tags/ebpf/" class="post-tag no-text-decoration" >ebpf</a> <a href="/tags/networking/" class="post-tag no-text-decoration" >networking</a> <a href="/tags/tcp/" class="post-tag no-text-decoration" >tcp</a> <a href="/tags/performance/" class="post-tag no-text-decoration" >performance</a></div><div class="post-tail-bottom d-flex justify-content-between align-items-center mt-3 pt-5 pb-2"><div class="license-wrapper"> This post is licensed under <a href="https://creativecommons.org/licenses/by/4.0/"> CC BY 4.0 </a> by the author.</div><div class="share-wrapper"> <span class="share-label text-muted mr-1">Share</span> <span class="share-icons"> <a href="https://twitter.com/intent/tweet?text=Stop%20Reshuffling%20Connections:%20Consistent%20Hashing%20in%20an%20L4%20Load%20Balancer%20-%20Salar%20Rabbal&url=%2Fposts%2Fconsistent-hashing-l4-load-balancer%2F" data-toggle="tooltip" data-placement="top" title="Twitter" target="_blank" rel="noopener" aria-label="Twitter"> <i class="fa-fw fab fa-twitter"></i> </a> <a href="https://www.facebook.com/sharer/sharer.php?title=Stop%20Reshuffling%20Connections:%20Consistent%20Hashing%20in%20an%20L4%20Load%20Balancer%20-%20Salar%20Rabbal&u=%2Fposts%2Fconsistent-hashing-l4-load-balancer%2F" data-toggle="tooltip" data-placement="top" title="Facebook" target="_blank" rel="noopener" aria-label="Facebook"> <i class="fa-fw fab fa-facebook-square"></i> </a> <a href="https://t.me/share/url?url=%2Fposts%2Fconsistent-hashing-l4-load-balancer%2F&text=Stop%20Reshuffling%20Connections:%20Consistent%20Hashing%20in%20an%20L4%20Load%20Balancer%20-%20Salar%20Rabbal" data-toggle="tooltip" data-placement="top" title="Telegram" target="_blank" rel="noopener" aria-label="Telegram"> <i class="fa-fw fab fa-telegram"></i> </a> <i id="copy-link" class="fa-fw fas fa-link small" data-toggle="tooltip" data-placement="top" title="Copy link" data-title-succeed="Link copied successfully!"> </i> </span></div></div></div></div></div><div id="panel-wrapper" class="col-xl-3 pl-2 text-muted"><div class="access"><div id="access-lastmod" class="post"><div class="panel-heading">Recently Updated</div><ul class="post-content pl-0 pb-1 ml-1 mt-2"><li><a href="/posts/quitting-smoking-allen-carr/">Getting My Life Back from Smoking</a></ul></div><div id="access-tags"><div class="panel-heading">Trending Tags</div><div class="d-flex flex-wrap mt-3 mb-1 mr-3"> <a class="post-tag" href="/tags/performance/">performance</a> <a class="post-tag" href="/tags/caching/">caching</a> <a class="post-tag" href="/tags/cdn/">cdn</a> <a class="post-tag" href="/tags/consistent-hashing/">consistent-hashing</a> <a class="post-tag" href="/tags/ebpf/">ebpf</a> <a class="post-tag" href="/tags/health/">health</a> <a class="post-tag" href="/tags/life/">life</a> <a class="post-tag" href="/tags/lifestyle/">lifestyle</a> <a class="post-tag" href="/tags/load-balancing/">load-balancing</a> <a class="post-tag" href="/tags/networking/">networking</a></div></div></div><div id="toc-wrapper" class="pl-0 pr-4 mb-5"><div class="panel-heading pl-3 pt-2 mb-2">Contents</div><nav id="toc"></nav></div><script src="https://cdn.jsdelivr.net/npm/tocbot@4.20.1/dist/tocbot.min.js"></script></div></div><div class="row"><div id="tail-wrapper" class="col-12 col-lg-11 col-xl-9 pl-3 pr-3 pr-xl-4 mt-5"><div id="related-posts" class="mb-2 mb-sm-4"><h3 class="pt-2 mb-4 ml-1" data-toc-skip>Further Reading</h3><div class="card-deck mb-4"><div class="card"> <a href="/posts/purge-at-scale-prefix-trees/"><div class="card-body"> <em class="small" data-ts="1788817200" data-df="ll" > Sep 7, 2026 </em><h3 class="pt-0 mt-1 mb-3" data-toc-skip>Purge at Scale</h3><div class="text-muted small"><p> Caching is one of the core components of a CDN. Keeping content close to users reduces latency, lowers origin load, and increases serving capacity. But cached content does not always remain valid ...</p></div></div></a></div><div class="card"> <a href="/posts/quitting-smoking-allen-carr/"><div class="card-body"> <em class="small" data-ts="1788816480" data-df="ll" > Sep 7, 2026 </em><h3 class="pt-0 mt-1 mb-3" data-toc-skip>Getting My Life Back from Smoking</h3><div class="text-muted small"><p> This is my first post, and it is not about software. ✍️ For years I thought cigarettes helped with stress, focus, and breaks. Allen Carr’s Easy Way to Stop Smoking flipped that story: nicotine cre...</p></div></div></a></div></div></div><div class="post-navigation d-flex justify-content-between"> <a href="/posts/purge-at-scale-prefix-trees/" class="btn btn-outline-primary" prompt="Older"><p>Purge at Scale</p></a><div class="btn btn-outline-primary disabled" prompt="Newer"><p>-</p></div></div></div></div></div><div id="search-result-wrapper" class="d-flex justify-content-center unloaded"><div class="col-12 col-sm-11 post-content"><div id="search-hints"><div id="access-tags"><div class="panel-heading">Trending Tags</div><div class="d-flex flex-wrap mt-3 mb-1 mr-3"> <a class="post-tag" href="/tags/performance/">performance</a> <a class="post-tag" href="/tags/caching/">caching</a> <a class="post-tag" href="/tags/cdn/">cdn</a> <a class="post-tag" href="/tags/consistent-hashing/">consistent-hashing</a> <a class="post-tag" href="/tags/ebpf/">ebpf</a> <a class="post-tag" href="/tags/health/">health</a> <a class="post-tag" href="/tags/life/">life</a> <a class="post-tag" href="/tags/lifestyle/">lifestyle</a> <a class="post-tag" href="/tags/load-balancing/">load-balancing</a> <a class="post-tag" href="/tags/networking/">networking</a></div></div></div><div id="search-results" class="d-flex flex-wrap justify-content-center text-muted mt-3"></div></div></div></div><footer><div class="container pl-lg-4 pr-lg-4"><div class="d-flex justify-content-between align-items-center text-muted ml-md-3 mr-md-3"><div class="footer-left"><p class="mb-0"> © 2026 <a href="https://twitter.com/salar_rabbal">Salar Rabbal</a>. <span data-toggle="tooltip" data-placement="top" title="Except where otherwise noted, the blog posts on this site are licensed under the Creative Commons Attribution 4.0 International (CC BY 4.0) License by the author.">Some rights reserved.</span></p></div><div class="footer-right"><p class="mb-0">Powered by <a href="https://jekyllrb.com" target="_blank" rel="noopener">Jekyll</a> with <a href="https://github.com/cotes2020/jekyll-theme-chirpy" target="_blank" rel="noopener">Chirpy</a> theme.</p></div></div></div></footer><div id="mask"></div><a id="back-to-top" href="#" aria-label="back-to-top" class="btn btn-lg btn-box-shadow" role="button"> <i class="fas fa-angle-up"></i> </a><div id="notification" class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-animation="true" data-autohide="false"><div class="toast-header"> <button type="button" class="ml-2 ml-auto close" data-dismiss="toast" aria-label="Close"> <span aria-hidden="true">&times;</span> </button></div><div class="toast-body text-center pt-0"><p class="pl-2 pr-2 mb-3">A new version of content is available.</p><button type="button" class="btn btn-primary" aria-label="Update"> Update </button></div></div><script src="https://cdn.jsdelivr.net/npm/simple-jekyll-search@1.10.0/dest/simple-jekyll-search.min.js"></script> <script> SimpleJekyllSearch({ searchInput: document.getElementById('search-input'), resultsContainer: document.getElementById('search-results'), json: '/assets/js/data/search.json', searchResultTemplate: '<div class="pl-1 pr-1 pl-sm-2 pr-sm-2 pl-lg-4 pr-lg-4 pl-xl-0 pr-xl-0"> <a href="{url}">{title}</a><div class="post-meta d-flex flex-column flex-sm-row text-muted mt-1 mb-1"> {categories} {tags}</div><p>{snippet}</p></div>', noResultsText: '<p class="mt-5">Oops! No results found.</p>', templateMiddleware: function(prop, value, template) { if (prop === 'categories') { if (value === '') { return `${value}`; } else { return `<div class="mr-sm-4"><i class="far fa-folder fa-fw"></i>${value}</div>`; } } if (prop === 'tags') { if (value === '') { return `${value}`; } else { return `<div><i class="fa fa-tag fa-fw"></i>${value}</div>`; } } } }); </script> <script src="https://cdn.jsdelivr.net/combine/npm/magnific-popup@1/dist/jquery.magnific-popup.min.js,npm/lazysizes@5.3.2/lazysizes.min.js,npm/clipboard@2/dist/clipboard.min.js"></script> <script src="https://cdn.jsdelivr.net/combine/npm/dayjs@1/dayjs.min.js,npm/dayjs@1/locale/en.min.js,npm/dayjs@1/plugin/relativeTime.min.js,npm/dayjs@1/plugin/localizedFormat.min.js"></script> <script defer src="/assets/js/dist/post.min.js"></script> <script src="https://cdn.jsdelivr.net/npm/bootstrap@4/dist/js/bootstrap.bundle.min.js"></script> <script defer src="/app.js"></script>
