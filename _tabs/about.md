@@ -4,7 +4,7 @@ icon: fas fa-info-circle
 order: 4
 ---
 
-Hi, I'm **Salar Rabbal** – a Senior Software Engineer with over 9 years of experience building scalable, enterprise-grade software systems.
+Hi, I'm **Salar Rabbal** – a Senior Software Engineer with over 10 years of experience building scalable, enterprise-grade software systems.
 
 I'm currently part of the Edge/Delivery team at **Sotoon**, where I design and maintain CDN and DNS solutions. Recently, I've been working on real-time log-forwarding systems, smart-routing mechanisms, and infrastructure optimizations that directly impact performance and costs.
 

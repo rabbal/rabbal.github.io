@@ -23,11 +23,10 @@ timezone:
 
 title: Salar Rabbal # the main title
 
-tagline: Forward-looking Software Engineer # it will display as the sub-title
+tagline: Senior Software Engineer | Technical Leadership | Go | System Design | Distributed Systems | CDN | Linux # it will display as the sub-title
 
 description: >- # used by seo meta and the atom feed
-  A minimal, responsive, and powerful Jekyll theme for presenting professional writing.
-
+  Forward-looking software engineer with over 10 years of experience in developing substantial software, including the market-leading CDN and a cloud-native ERP for 73,000 customers. Proficient in Go, C#, .NET, JavaScript, NodeJS, TypeScript, Angular, and diverse web technologies. Skilled in system design, architecture, and CI/CD, particularly with Microservices and Micro-Frontends. Emphasizes the importance of clean code, self-testing, and efficient refactoring. Technical leader with a passion for building high-performing teams and driving technical excellence.
 # fill in the protocol & hostname for your site, e.g., 'https://username.github.io'
 url: ""
 
